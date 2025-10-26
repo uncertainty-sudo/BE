@@ -24,25 +24,33 @@ class LogRepository:
                 "verify_certs": False,
                 "request_timeout": 30,
             }
-            print(f"DEBUG: Attempting to connect to Elasticsearch at: {settings.ELASTICSEARCH_URL}") # DEBUG PRINT
-            
+
             # 인증 정보가 있으면 추가
             if settings.ELASTICSEARCH_USERNAME and settings.ELASTICSEARCH_PASSWORD:
-                es_config["basic_auth"] = (settings.ELASTICSEARCH_USERNAME, settings.ELASTICSEARCH_PASSWORD)
-            
-            self.es_client = Elasticsearch(**es_config)
-            
+                es_config["basic_auth"] = (
+                    settings.ELASTICSEARCH_USERNAME,
+                    settings.ELASTICSEARCH_PASSWORD,
+                )
+
+            client = Elasticsearch(**es_config)
+
             # 연결 테스트
-            if self.es_client.ping():
-                logger.info(f"Elasticsearch connected: {settings.ELASTICSEARCH_URL}")
+            if client.ping():
+                logger.info("Elasticsearch connected: %s", settings.ELASTICSEARCH_URL)
+                self.es_client = client
                 self._create_index_if_not_exists()
             else:
+                logger.warning(
+                    "Elasticsearch ping failed for %s; continuing with read-only fallbacks",
+                    settings.ELASTICSEARCH_URL,
+                )
                 self.es_client = None
-                raise ConnectionError("Failed to connect to Elasticsearch. Please check the connection and settings.")
-                
-        except Exception as e:
+
+        except Exception as exc:
+            logger.error(
+                "Failed to initialize Elasticsearch client: %s", exc,
+            )
             self.es_client = None
-            raise ConnectionError(f"Failed to initialize Elasticsearch: {str(e)}")
     
     def _create_index_if_not_exists(self):
         """인덱스가 없으면 생성"""
