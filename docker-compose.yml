@@ -63,8 +63,10 @@ services:
       DEFAULT_PII_THRESHOLD: 0.59
       MODEL_MODE: LOCAL
     depends_on:
-      - elasticsearch
-      - postgres
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
       - .:/app # 코드 변경 시 컨테이너 재빌드 없이 반영 (개발용)
 

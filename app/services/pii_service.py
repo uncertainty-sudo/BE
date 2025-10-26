@@ -40,6 +40,32 @@ class PIIDetectionService:
         reason = self._generate_reason(has_pii, entities)
         details = self._generate_details(has_pii, entities)
 
+        # 로그 기록 로직 추가
+        try:
+            from app.repositories.log_repository import get_log_repository
+            from app.schemas.log import PIIDetectionLog, LogLevel
+            from datetime import datetime
+
+            log_repo = get_log_repository()
+            action = "BLOCK" if has_pii else "ALLOW"
+            
+            # 클라이언트 IP 등 추가 정보는 여기서 얻거나 상위 계층에서 받아와야 함
+            # 지금은 임시 값으로 설정
+            log_entry = PIIDetectionLog(
+                client_ip="127.0.0.1",
+                input_text=text,
+                text_length=len(text),
+                has_pii=has_pii,
+                detected_entities=[e.model_dump() for e in entities],
+                entity_count=len(entities),
+                entity_types=[e.type for e in entities],
+                level=LogLevel.WARNING if has_pii else LogLevel.INFO,
+                metadata={"action": action}
+            )
+            await log_repo.save_log(log_entry)
+        except Exception as log_e:
+            logger.error(f"Failed to log PII detection event: {log_e}")
+
         return PIIDetectionResponse(
             has_pii=has_pii,
             reason=reason,

@@ -48,9 +48,28 @@ class PIIDetector:
         """실제 PII 탐지 로직 (파이프라인 사용)"""
         if self.pipeline is None:
             raise RuntimeError("PII detection pipeline is not initialized.")
-        # 실제 탐지 로직은 여기에 구현
-        # 현재는 임시로 더미 결과 반환
-        return {"has_pii": False, "entities": []}
+        
+        try:
+            # 파이프라인을 통해 모델 추론 실행
+            predictions = self.pipeline(text)
+            
+            # 파이프라인 결과가 비어있지 않고, 내용이 있는지 확인
+            if predictions and isinstance(predictions, list):
+                entities = [
+                    {
+                        "type": entity['entity_group'],
+                        "value": entity['word'],
+                        "confidence": entity['score']
+                    }
+                    for entity in predictions
+                ]
+                return {"has_pii": True, "entities": entities}
+            else:
+                return {"has_pii": False, "entities": []}
+
+        except Exception as e:
+            logger.error(f"Error during PII detection pipeline inference: {e}", exc_info=True)
+            return {"has_pii": False, "entities": []}
 
 @lru_cache(maxsize=1)
 def get_pii_detector() -> PIIDetector:

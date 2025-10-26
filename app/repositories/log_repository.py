@@ -86,6 +86,13 @@ class LogRepository:
                                     "value": {"type": "text"},
                                     "confidence": {"type": "float"}
                                 }
+                            },
+                            "metadata": {
+                                "type": "object",
+                                "enabled": False, 
+                                "properties": {
+                                    "action": { "type": "keyword" }
+                                }
                             }
                         }
                     },

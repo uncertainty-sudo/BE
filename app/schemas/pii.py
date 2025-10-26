@@ -7,7 +7,7 @@ class DetectedEntity(BaseModel):
     type: str = Field(..., description="PII 타입 (예: PERSON, PHONE, EMAIL 등)")
     value: str = Field(..., description="탐지된 개인정보 값")
     confidence: float = Field(..., description="탐지 신뢰도 (0.0 ~ 1.0)", ge=0.0, le=1.0)
-    token_count: int = Field(..., description="해당 엔티티의 토큰 개수", gt=0)
+    token_count: int = Field(..., description="해당 엔티티의 토큰 개수", ge=0)
 
 class PIIDetectionResponse(BaseModel):
     has_pii: bool = Field(..., description="개인정보 탐지 여부")
