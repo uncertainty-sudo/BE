@@ -14,6 +14,8 @@ class LogRepository:
     def __init__(self):
         self.es_client: Optional[Elasticsearch] = None
         self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}-logs"
+        self.available: bool = False
+        self.initialization_error: Optional[str] = None
         self._init_elasticsearch()
     
     def _init_elasticsearch(self):
@@ -24,25 +26,39 @@ class LogRepository:
                 "verify_certs": False,
                 "request_timeout": 30,
             }
-            print(f"DEBUG: Attempting to connect to Elasticsearch at: {settings.ELASTICSEARCH_URL}") # DEBUG PRINT
-            
+
             # 인증 정보가 있으면 추가
             if settings.ELASTICSEARCH_USERNAME and settings.ELASTICSEARCH_PASSWORD:
-                es_config["basic_auth"] = (settings.ELASTICSEARCH_USERNAME, settings.ELASTICSEARCH_PASSWORD)
-            
-            self.es_client = Elasticsearch(**es_config)
-            
+                es_config["basic_auth"] = (
+                    settings.ELASTICSEARCH_USERNAME,
+                    settings.ELASTICSEARCH_PASSWORD,
+                )
+
+            client = Elasticsearch(**es_config)
+
             # 연결 테스트
-            if self.es_client.ping():
-                logger.info(f"Elasticsearch connected: {settings.ELASTICSEARCH_URL}")
+            if client.ping():
+                logger.info("Elasticsearch connected: %s", settings.ELASTICSEARCH_URL)
+                self.es_client = client
+                self.available = True
+                self.initialization_error = None
                 self._create_index_if_not_exists()
             else:
+                logger.warning(
+                    "Elasticsearch ping failed for %s; continuing with read-only fallbacks",
+                    settings.ELASTICSEARCH_URL,
+                )
                 self.es_client = None
-                raise ConnectionError("Failed to connect to Elasticsearch. Please check the connection and settings.")
-                
-        except Exception as e:
+                self.available = False
+                self.initialization_error = "Ping failed"
+
+        except Exception as exc:
+            logger.error(
+                "Failed to initialize Elasticsearch client: %s", exc,
+            )
             self.es_client = None
-            raise ConnectionError(f"Failed to initialize Elasticsearch: {str(e)}")
+            self.available = False
+            self.initialization_error = str(exc)
     
     def _create_index_if_not_exists(self):
         """인덱스가 없으면 생성"""
@@ -95,7 +111,8 @@ class LogRepository:
     async def save_log(self, log: PIIDetectionLog) -> bool:
         """로그를 Elasticsearch에 저장"""
         if not self.es_client:
-            raise ConnectionError("Elasticsearch client is not available. Log was not saved.")
+            logger.debug("Skipping log persistence because Elasticsearch client is unavailable")
+            return False
         
         try:
             # 고유 ID 생성
@@ -116,7 +133,11 @@ class LogRepository:
         except Exception as e:
             logger.error(f"Failed to save log to Elasticsearch: {str(e)}")
             return False
-    
+
+    def is_available(self) -> bool:
+        """Elasticsearch 사용 가능 여부를 반환합니다."""
+        return self.es_client is not None and self.available
+
     async def get_log_by_id(self, log_id: str) -> Optional[PIIDetectionLog]:
         """ID로 단일 로그 조회"""
         if not self.es_client:
@@ -316,7 +337,7 @@ class LogRepository:
                 entity_type_stats={}, hourly_stats={}, avg_processing_time=0.0,
                 top_ips=[]
             )
-        
+
         try:
             end_time = datetime.now()
             start_time = end_time - timedelta(days=days)
@@ -409,6 +430,124 @@ class LogRepository:
                 entity_type_stats={}, hourly_stats={}, avg_processing_time=0.0,
                 top_ips=[]
             )
+
+    async def get_dashboard_summary_stats(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
+        """대시보드 요약에 필요한 집계 데이터를 조회"""
+        if not self.es_client:
+            logger.warning("Elasticsearch client not available while fetching dashboard summary stats")
+            return {}
+
+        try:
+            query = {
+                "bool": {
+                    "must": [
+                        {
+                            "range": {
+                                "timestamp": {
+                                    "gte": start_time.isoformat(),
+                                    "lte": end_time.isoformat(),
+                                }
+                            }
+                        }
+                    ]
+                }
+            }
+
+            agg_query = {
+                "query": query,
+                "aggs": {
+                    "total_logs": {"value_count": {"field": "id"}},
+                    "pii_detected": {"filter": {"term": {"has_pii": True}}},
+                    "entity_types": {"terms": {"field": "entity_types", "size": 25}},
+                    "hourly_stats": {
+                        "date_histogram": {
+                            "field": "timestamp",
+                            "calendar_interval": "hour",
+                            "min_doc_count": 0,
+                            "extended_bounds": {
+                                "min": start_time.isoformat(),
+                                "max": end_time.isoformat(),
+                            },
+                        }
+                    },
+                    "quarterly_stats": {
+                        "date_histogram": {
+                            "field": "timestamp",
+                            "calendar_interval": "quarter",
+                        },
+                        "aggs": {
+                            "pii_detected": {"filter": {"term": {"has_pii": True}}}
+                        },
+                    },
+                    "top_ips": {"terms": {"field": "client_ip", "size": 10}},
+                    "label_action_breakdown": {
+                        "terms": {"field": "entity_types", "size": 25},
+                        "aggs": {
+                            "actions": {"terms": {"field": "metadata.action.keyword", "size": 10}}
+                        },
+                    },
+                    "log_status_stats": {"terms": {"field": "metadata.log_status.keyword", "size": 10}},
+                    "project_stats": {"terms": {"field": "metadata.project.keyword", "size": 20}},
+                    "ai_service_stats": {"terms": {"field": "metadata.service.keyword", "size": 20}},
+                },
+                "size": 0,
+            }
+
+            response = self.es_client.search(index=self.index_name, body=agg_query)
+            return response.get("aggregations", {})
+
+        except Exception as e:
+            logger.error(f"Failed to get dashboard summary stats: {str(e)}")
+            return {}
+
+    async def get_recent_detections(self, limit: int = 10, since: Optional[datetime] = None) -> List[PIIDetectionLog]:
+        """최근 탐지된 로그를 조회"""
+        if not self.es_client:
+            logger.warning("Elasticsearch client not available while fetching recent detections")
+            return []
+
+        try:
+            must_conditions: List[Dict[str, Any]] = [
+                {"term": {"has_pii": True}}
+            ]
+
+            if since is not None:
+                must_conditions.append(
+                    {
+                        "range": {
+                            "timestamp": {
+                                "gte": since.isoformat(),
+                            }
+                        }
+                    }
+                )
+
+            query = {"bool": {"must": must_conditions}}
+
+            response = self.es_client.search(
+                index=self.index_name,
+                body={
+                    "query": query,
+                    "sort": [{"timestamp": {"order": "desc"}}],
+                    "size": limit,
+                },
+            )
+
+            hits = response.get("hits", {}).get("hits", [])
+            logs: List[PIIDetectionLog] = []
+            for hit in hits:
+                source = hit.get("_source", {})
+                source["id"] = hit.get("_id")
+                try:
+                    logs.append(PIIDetectionLog(**source))
+                except Exception as e:
+                    logger.warning(f"Failed to parse recent detection hit: {e}")
+
+            return logs
+
+        except Exception as e:
+            logger.error(f"Failed to get recent detections: {str(e)}")
+            return []
 
     async def count_blocks_since(self, start_time: datetime) -> int:
         """특정 시간 이후의 차단 로그 개수를 집계"""
