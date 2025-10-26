@@ -143,6 +143,24 @@ class LogService:
             )
 
         try:
+            repo_available = False
+            if hasattr(self.log_repository, "is_available"):
+                repo_available = self.log_repository.is_available()
+            else:
+                repo_available = bool(getattr(self.log_repository, "es_client", None))
+
+            if not repo_available:
+                reason = getattr(self.log_repository, "initialization_error", None)
+                if reason:
+                    logger.warning(
+                        "Elasticsearch unavailable, returning empty dashboard summary. reason=%s",
+                        reason,
+                    )
+                else:
+                    logger.warning(
+                        "Elasticsearch unavailable, returning empty dashboard summary.")
+                return _empty_summary()
+
             end_time = datetime.utcnow().replace(tzinfo=pytz.utc)
             start_time = end_time - timedelta(days=days)
 

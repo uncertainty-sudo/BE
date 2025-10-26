@@ -14,6 +14,8 @@ class LogRepository:
     def __init__(self):
         self.es_client: Optional[Elasticsearch] = None
         self.index_name = f"{settings.ELASTICSEARCH_INDEX_PREFIX}-logs"
+        self.available: bool = False
+        self.initialization_error: Optional[str] = None
         self._init_elasticsearch()
     
     def _init_elasticsearch(self):
@@ -38,6 +40,8 @@ class LogRepository:
             if client.ping():
                 logger.info("Elasticsearch connected: %s", settings.ELASTICSEARCH_URL)
                 self.es_client = client
+                self.available = True
+                self.initialization_error = None
                 self._create_index_if_not_exists()
             else:
                 logger.warning(
@@ -45,12 +49,16 @@ class LogRepository:
                     settings.ELASTICSEARCH_URL,
                 )
                 self.es_client = None
+                self.available = False
+                self.initialization_error = "Ping failed"
 
         except Exception as exc:
             logger.error(
                 "Failed to initialize Elasticsearch client: %s", exc,
             )
             self.es_client = None
+            self.available = False
+            self.initialization_error = str(exc)
     
     def _create_index_if_not_exists(self):
         """인덱스가 없으면 생성"""
@@ -103,7 +111,8 @@ class LogRepository:
     async def save_log(self, log: PIIDetectionLog) -> bool:
         """로그를 Elasticsearch에 저장"""
         if not self.es_client:
-            raise ConnectionError("Elasticsearch client is not available. Log was not saved.")
+            logger.debug("Skipping log persistence because Elasticsearch client is unavailable")
+            return False
         
         try:
             # 고유 ID 생성
@@ -124,7 +133,11 @@ class LogRepository:
         except Exception as e:
             logger.error(f"Failed to save log to Elasticsearch: {str(e)}")
             return False
-    
+
+    def is_available(self) -> bool:
+        """Elasticsearch 사용 가능 여부를 반환합니다."""
+        return self.es_client is not None and self.available
+
     async def get_log_by_id(self, log_id: str) -> Optional[PIIDetectionLog]:
         """ID로 단일 로그 조회"""
         if not self.es_client:
