@@ -1,53 +1,60 @@
-:root {
-  color-scheme: light;
-  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: light;
+    --font-inter: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --background: 244 240 255;
+    --foreground: 15 23 42;
+  }
+
+  body {
+    @apply m-0 min-h-screen bg-slate-100 font-sans text-slate-900 antialiased;
+  }
+
+  a {
+    @apply text-inherit no-underline;
+  }
+
+  button {
+    @apply cursor-pointer;
+  }
+
+  input,
+  select,
+  textarea {
+    @apply font-inherit;
+  }
 }
 
-body {
-  margin: 0;
-}
+@layer components {
+  .card {
+    @apply rounded-2xl border border-slate-200/80 bg-white p-6 shadow-soft;
+  }
 
-a {
-  color: inherit;
-  text-decoration: none;
-}
+  .badge {
+    @apply inline-flex items-center gap-2 rounded-full bg-primary-50 px-3 py-1 text-xs font-semibold text-primary-700;
+  }
 
-button {
-  cursor: pointer;
-}
+  .table {
+    @apply min-w-full divide-y divide-slate-200 text-sm;
+  }
 
-input, select, textarea {
-  font: inherit;
-}
+  .table thead {
+    @apply bg-slate-50;
+  }
 
-.table {
-  width: 100%;
-  border-collapse: collapse;
-}
+  .table th {
+    @apply px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-500;
+  }
 
-.table th,
-.table td {
-  border-bottom: 1px solid #cbd5f5;
-  text-align: left;
-  padding: 0.5rem;
-}
+  .table td {
+    @apply px-4 py-3 text-sm text-slate-700;
+  }
 
-.card {
-  background: white;
-  border-radius: 0.75rem;
-  border: 1px solid rgba(15, 23, 42, 0.08);
-  padding: 1.25rem;
-  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
-}
-
-.badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.25rem;
-  border-radius: 9999px;
-  background-color: #e2e8f0;
-  color: #0f172a;
-  padding: 0.25rem 0.75rem;
-  font-size: 0.75rem;
-  font-weight: 600;
+  .table tbody tr {
+    @apply transition hover:bg-slate-50;
+  }
 }
