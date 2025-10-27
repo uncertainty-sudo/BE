@@ -19,49 +19,63 @@ class LogRepository:
         self._init_elasticsearch()
     
     def _init_elasticsearch(self):
-        """Elasticsearch 클라이언트 초기화"""
-        try:
-            es_config = {
-                "hosts": [settings.ELASTICSEARCH_URL],
-                "verify_certs": False,
-                "request_timeout": 30,
-            }
+        """Elasticsearch 클라이언트 초기화 (재시도 로직 추가)"""
+        import time
+        max_retries = 5
+        retry_delay = 3  # seconds (dev 속도 개선)
 
-            # 인증 정보가 있으면 추가
-            if settings.ELASTICSEARCH_USERNAME and settings.ELASTICSEARCH_PASSWORD:
-                es_config["basic_auth"] = (
-                    settings.ELASTICSEARCH_USERNAME,
-                    settings.ELASTICSEARCH_PASSWORD,
-                )
+        for attempt in range(max_retries):
+            try:
+                es_config = {
+                    "hosts": [settings.ELASTICSEARCH_URL],
+                    "verify_certs": False,
+                }
 
-            client = Elasticsearch(**es_config)
+                if settings.ELASTICSEARCH_USERNAME and settings.ELASTICSEARCH_PASSWORD:
+                    es_config["basic_auth"] = (
+                        settings.ELASTICSEARCH_USERNAME,
+                        settings.ELASTICSEARCH_PASSWORD,
+                    )
 
-            # 연결 테스트
-            if client.ping():
-                logger.info("Elasticsearch connected: %s", settings.ELASTICSEARCH_URL)
-                self.es_client = client
-                self.available = True
-                self.initialization_error = None
-                self._create_index_if_not_exists()
-            else:
-                logger.warning(
-                    "Elasticsearch ping failed for %s; continuing with read-only fallbacks",
-                    settings.ELASTICSEARCH_URL,
-                )
-                self.es_client = None
-                self.available = False
-                self.initialization_error = "Ping failed"
+                client = Elasticsearch(**es_config)
 
-        except Exception as exc:
-            logger.error(
-                "Failed to initialize Elasticsearch client: %s", exc,
-            )
-            self.es_client = None
-            self.available = False
-            self.initialization_error = str(exc)
+                if client.info():  # 연결 성공
+                    logger.info(f"Elasticsearch connected on attempt {attempt + 1}: {settings.ELASTICSEARCH_URL}")
+                    self.es_client = client
+                    if self._create_index_if_not_exists():
+                        self.available = True
+                        self.initialization_error = None
+                        return
+                    else:
+                        logger.error("Failed to create Elasticsearch index. Repository will be unavailable.")
+                        self.available = False
+                        self.initialization_error = "Failed to create index"
+                        return
+
+                logger.warning(f"Elasticsearch info() call failed on attempt {attempt + 1}. Retrying in {retry_delay}s...")
+
+            except Exception as exc:
+                logger.error(f"Failed to initialize Elasticsearch on attempt {attempt + 1}: {exc}")
+            
+            time.sleep(retry_delay)
+
+        logger.error(f"Failed to connect to Elasticsearch after {max_retries} attempts. Continuing in read-only mode.")
+        self.es_client = None
+        self.available = False
+        self.initialization_error = "Failed to connect after multiple retries"
+        # No-Op로 대체
+        _log = NoOpLogRepository()
+        self.is_available = _log.is_available  # 메서드 바인딩
+        self.save_log = _log.save_log
+        self.get_log_by_id = _log.get_log_by_id
+        self.search_logs = _log.search_logs
+        self.get_stats = _log.get_stats
+        self.get_dashboard_summary_stats = _log.get_dashboard_summary_stats
+        self.get_recent_detections = _log.get_recent_detections
+        self.count_blocks_since = _log.count_blocks_since
     
-    def _create_index_if_not_exists(self):
-        """인덱스가 없으면 생성"""
+    def _create_index_if_not_exists(self) -> bool:
+        """인덱스가 없으면 생성하고 성공 여부를 반환"""
         try:
             if not self.es_client.indices.exists(index=self.index_name):
                 mapping = {
@@ -83,15 +97,21 @@ class LogRepository:
                                 "type": "nested",
                                 "properties": {
                                     "type": {"type": "keyword"},
-                                    "value": {"type": "text"},
+                                    "value": {
+                                        "type": "text",
+                                        "fields": { "keyword": { "type": "keyword", "ignore_above": 256 } }
+                                    },
                                     "confidence": {"type": "float"}
                                 }
                             },
                             "metadata": {
                                 "type": "object",
-                                "enabled": False, 
+                                "dynamic": "strict",
                                 "properties": {
-                                    "action": { "type": "keyword" }
+                                    "action":      { "type": "keyword" },
+                                    "log_status":  { "type": "keyword" },
+                                    "project":     { "type": "keyword" },
+                                    "service":     { "type": "keyword" }
                                 }
                             }
                         }
@@ -111,11 +131,19 @@ class LogRepository:
                 
                 self.es_client.indices.create(index=self.index_name, body=mapping)
                 logger.info(f"Created Elasticsearch index: {self.index_name}")
-                
+                # 인덱스 생성 후, 인덱스가 실제로 존재하는지 확인하는 재시도 로직 추가
+                for i in range(5):
+                    if self.es_client.indices.exists(index=self.index_name):
+                        logger.info(f"Elasticsearch index '{self.index_name}' confirmed to exist after creation.")
+                        return True
+                    logger.warning(f"Waiting for Elasticsearch index '{self.index_name}' to be available (attempt {i+1}/5)...")
+                    time.sleep(1) # 1초 대기
+                logger.error(f"Elasticsearch index '{self.index_name}' did not become available after creation attempts.")
+                return False
+            return True
         except Exception as e:
-            logger.error(f"Failed to create index: {str(e)}")
-    
-    async def save_log(self, log: PIIDetectionLog) -> bool:
+            logger.error(f"Failed to create index '{self.index_name}': {str(e)}")
+            return False
         """로그를 Elasticsearch에 저장"""
         if not self.es_client:
             logger.debug("Skipping log persistence because Elasticsearch client is unavailable")
@@ -575,7 +603,7 @@ class LogRepository:
                         },
                         {
                             "term": {
-                                "metadata.action.keyword": "BLOCK"
+                                "metadata.action": "BLOCK"
                             }
                         }
                     ]
@@ -595,6 +623,22 @@ class LogRepository:
 
 # 싱글톤 인스턴스
 _log_repository_instance: Optional[LogRepository] = None
+
+class NoOpLogRepository:
+    def __init__(self): self.available = False
+    async def save_log(self, log): return False
+    def is_available(self): return False
+    async def get_log_by_id(self, log_id): return None
+    async def search_logs(self, req): 
+        from app.schemas.log import LogSearchResponse
+        return LogSearchResponse(logs=[], total=0, page=req.page, size=req.size, total_pages=0, stats={})
+    async def get_stats(self, days=7):
+        from app.schemas.log import LogStatsResponse
+        return LogStatsResponse(total_logs=0, pii_detected_count=0, pii_detection_rate=0.0,
+                                entity_type_stats={}, hourly_stats={}, avg_processing_time=0.0, top_ips=[])
+    async def get_dashboard_summary_stats(self, *_a, **_k): return {}
+    async def get_recent_detections(self, limit=10, since=None): return []
+    async def count_blocks_since(self, start_time): return 0
 
 def get_log_repository() -> LogRepository:
     """로그 저장소 싱글톤 인스턴스 반환"""

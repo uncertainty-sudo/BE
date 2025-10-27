@@ -2,77 +2,15 @@ from functools import lru_cache
 from typing import Optional
 import logging
 
-from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
-import torch
-
-from app.core.config import settings
+from app.ai.pii_detector import RobertaKoreanPIIDetector
 
 logger = logging.getLogger(__name__)
 
 # 전역 모델 인스턴스 저장소
-_pii_detector_instance: Optional['PIIDetector'] = None
-
-class PIIDetector:
-    """PII 탐지 모델을 관리하는 클래스"""
-    def __init__(self):
-        self.model_name = settings.PII_MODEL_NAME
-        self.default_threshold = settings.DEFAULT_PII_THRESHOLD
-        self.tokenizer = None
-        self.model = None
-        self.pipeline = None
-        self._load_model()
-
-    def _load_model(self):
-        logger.info(f"Attempting to load tokenizer for {self.model_name}...")
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-            logger.info("Tokenizer loaded successfully.")
-
-            logger.info(f"Attempting to load model for {self.model_name}...")
-            self.model = AutoModelForTokenClassification.from_pretrained(self.model_name)
-            logger.info("Model loaded successfully.")
-
-            self.pipeline = pipeline(
-                "ner",
-                model=self.model,
-                tokenizer=self.tokenizer,
-                aggregation_strategy="simple",
-                device=0 if torch.cuda.is_available() else -1,
-            )
-            logger.info("PII detection pipeline initialized.")
-        except Exception as e:
-            logger.error(f"Failed to load PII detection model: {e}", exc_info=True)
-            raise RuntimeError(f"Failed to load PII detection model: {e}")
-
-    async def detect_pii(self, text: str):
-        """실제 PII 탐지 로직 (파이프라인 사용)"""
-        if self.pipeline is None:
-            raise RuntimeError("PII detection pipeline is not initialized.")
-        
-        try:
-            # 파이프라인을 통해 모델 추론 실행
-            predictions = self.pipeline(text)
-            
-            # 파이프라인 결과가 비어있지 않고, 내용이 있는지 확인
-            if predictions and isinstance(predictions, list):
-                entities = [
-                    {
-                        "type": entity['entity_group'],
-                        "value": entity['word'],
-                        "confidence": entity['score']
-                    }
-                    for entity in predictions
-                ]
-                return {"has_pii": True, "entities": entities}
-            else:
-                return {"has_pii": False, "entities": []}
-
-        except Exception as e:
-            logger.error(f"Error during PII detection pipeline inference: {e}", exc_info=True)
-            return {"has_pii": False, "entities": []}
+_pii_detector_instance: Optional["RobertaKoreanPIIDetector"] = None
 
 @lru_cache(maxsize=1)
-def get_pii_detector() -> PIIDetector:
+def get_pii_detector() -> RobertaKoreanPIIDetector:
     """
     PII 탐지 모델을 싱글톤으로 관리
     """
@@ -81,7 +19,7 @@ def get_pii_detector() -> PIIDetector:
     if _pii_detector_instance is None:
         logger.info("Loading PII detection model (singleton initialization)...")
         try:
-            _pii_detector_instance = PIIDetector()
+            _pii_detector_instance = RobertaKoreanPIIDetector()
             logger.info("PII detection model loaded successfully")
         except RuntimeError as e:
             logger.error(f"Failed to initialize PIIDetector: {e}")
@@ -120,7 +58,7 @@ def cleanup_models():
 
     # PII 모델 정리
     if _pii_detector_instance is not None:
-        if hasattr(_pii_detector_instance, 'model') and hasattr(_pii_detector_instance.model, 'cpu'):
+        if hasattr(_pii_detector_instance, "model") and hasattr(_pii_detector_instance.model, "cpu"):
             _pii_detector_instance.model.cpu()
         _pii_detector_instance = None
         get_pii_detector.cache_clear()
