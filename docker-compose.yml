@@ -14,10 +14,10 @@ services:
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
-      test: ["CMD-SHELL", "curl -s http://localhost:9200 >/dev/null || exit 1"]
+      test: ["CMD-SHELL", "curl --silent --fail localhost:9200/_cluster/health || exit 1"]
       interval: 10s
-      timeout: 5s
-      retries: 30
+      timeout: 10s
+      retries: 5
 
   kibana:
     image: docker.elastic.co/kibana/kibana:8.14.3
@@ -63,8 +63,10 @@ services:
       DEFAULT_PII_THRESHOLD: 0.59
       MODEL_MODE: LOCAL
     depends_on:
-      - elasticsearch
-      - postgres
+      elasticsearch:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
     volumes:
       - .:/app # 코드 변경 시 컨테이너 재빌드 없이 반영 (개발용)
 

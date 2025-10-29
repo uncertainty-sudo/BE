@@ -12,13 +12,18 @@ class GetTodayBlockCountUseCase:
     def __init__(self, db: AsyncSession = None):
         self.log_service = LogService()
 
-    async def execute(self, tz: str) -> Tuple[int, datetime.datetime]:
+    async def execute(self, tz: str = None) -> Tuple[int, datetime.datetime]:
         """
         Use Case 실행
         1. 지정된 시간대(tz) 기준 오늘 자정 시각 계산
         2. LogService를 통해 해당 시각 이후의 차단 로그 개수 조회
         """
-        client_tz = pytz.timezone(tz)
+        try:
+            # tz가 없거나 유효하지 않은 경우 UTC를 기본값으로 사용
+            client_tz = pytz.timezone(tz or 'UTC')
+        except pytz.UnknownTimeZoneError:
+            client_tz = pytz.timezone('UTC')
+
         now_in_tz = datetime.datetime.now(client_tz)
         start_of_day_in_tz = now_in_tz.replace(hour=0, minute=0, second=0, microsecond=0)
         

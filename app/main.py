@@ -1,13 +1,21 @@
 # app/main.py
-from fastapi import FastAPI
+import logging
+import os
+
+from fastapi import FastAPI, APIRouter, Depends, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
+
 from app.api.routers.pii import router as pii_router
 from app.api.routers.auth import router as auth_router
 from app.api.routers.logs import router as logs_router
 from app.api.routers.detection_rules import router as detection_rules_router
 from app.api.routers import metrics as metrics_router
+from app.api.routers import dashboard as dashboard_router
+from app.api.routers import detection_settings as detection_settings_router
+from app.api.routers import projects as projects_router
+from app.api.routers import system_settings as system_settings_router
+# from app.api.routers import seeding as seeding_router # seeding 라우터 임포트
 from app.ai.model_manager import preload_models, cleanup_models
-import logging
 
 # 로깅 설정
 logging.basicConfig(level=logging.INFO)
@@ -22,28 +30,47 @@ app = FastAPI(
 )
 
 # CORS 미들웨어 추가 (개발환경용)
+DEFAULT_ALLOWED_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+def get_allowed_origins():
+    origins_env = os.getenv("BACKEND_CORS_ORIGINS")
+    if not origins_env:
+        return DEFAULT_ALLOWED_ORIGINS
+    return [origin.strip() for origin in origins_env.split(",") if origin.strip()]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_allowed_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# 라우터 추가
+# 라우터 추가 (모든 라우터를 app 객체에 직접 포함)
 app.include_router(auth_router, tags=["Authentication"])  # 인증 API (인증 불필요)
 app.include_router(pii_router, prefix="/api/v1/pii", tags=["PII Detection"])  # PII API (인증 필수)
 app.include_router(logs_router, prefix="/api/v1/logs", tags=["Logs"])  # 로그 API
 app.include_router(detection_rules_router, prefix="/api/v1/detection-rules", tags=["Detection Rules"])  # 탐지 규칙 API
-app.include_router(metrics_router.router) # 통계 API
+app.include_router(metrics_router.router, prefix="/api/v1/metrics", tags=["Metrics"])  # 통계 API
+app.include_router(dashboard_router.router, prefix="/api/v1/dashboard", tags=["Dashboard"])  # 대시보드 집계 API
+app.include_router(detection_settings_router.router, prefix="/api/v1/detection-settings", tags=["Detection Settings"])  # 탐지 기능 설정 API
+app.include_router(projects_router.router, prefix="/api/v1/projects", tags=["Projects"])  # 프로젝트 관리 API
+app.include_router(system_settings_router.router, prefix="/api/v1/system-settings", tags=["System Settings"])  # 시스템 설정 API
+# app.include_router(seeding_router.router, prefix="/api/v1/seed", tags=["Seeding"]) # 데이터 시딩 API
 
 # 애플리케이션 시작/종료 이벤트 핸들러
 @app.on_event("startup")
 async def startup_event():
     """애플리케이션 시작 시 실행"""
     logger.info("Starting AI-TLS-DLP Backend...")
-    preload_models()  # 모델 사전 로딩
+    # preload_models()  # 모델 사전 로딩 임시 비활성화
     logger.info("AI-TLS-DLP Backend startup completed")
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
@@ -51,6 +78,7 @@ async def shutdown_event():
     logger.info("Shutting down AI-TLS-DLP Backend...")
     cleanup_models()  # 모델 메모리 정리
     logger.info("AI-TLS-DLP Backend shutdown completed")
+
 
 @app.get("/", summary="API 상태 확인")
 async def root():

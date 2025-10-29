@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     DATABASE_URL: str = "postgresql+asyncpg://admin:password123@localhost:5432/ai_tlsdlp"
     
     # JWT
-    SECRET_KEY: str = "dlp-secret-key-change-in-production-minimum-32-characters-required"
+    SECRET_KEY: str = os.getenv("SECRET_KEY", "dlp-secret-key-change-in-production-minimum-32-characters-required")
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
     
